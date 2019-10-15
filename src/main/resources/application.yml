@@ -1,0 +1,4 @@
+logging:
+  level:
+    org.springframework.core: WARN
+    com.ait.demo: DEBUG

@@ -1,0 +1,82 @@
+plugins {
+    id 'java'
+    id 'idea'
+    id 'net.researchgate.release' version '2.8.0'
+    id 'maven'
+    id 'maven-publish'
+    id 'org.springframework.boot' version '2.1.9.RELEASE'
+    id 'project-report'
+    id 'com.palantir.docker' version '0.21.0'
+    id 'io.spring.dependency-management' version '1.0.8.RELEASE'
+}
+
+jar {
+    enabled = true
+}
+
+bootJar {
+    classifier = "full"
+}
+
+dependencies {
+    compile 'org.springframework.boot:spring-boot-starter-web'
+    compile 'org.springframework.boot:spring-boot-starter-security'
+    testCompile 'org.springframework.boot:spring-boot-starter-test'
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+afterReleaseBuild.dependsOn 'docker','dockerTag','dockerPush'
+
+task unpack(type: Copy) {
+    dependsOn  bootJar
+
+    from(zipTree(tasks.bootJar.outputs.files.singleFile))
+    into("build/dependency")
+}
+
+final STABLE_ARTIFACTS_PROPERTY = "build.packaging.stableArtifacts";
+
+task repackStableArtifactsPrepare {
+    dependsOn unpack
+
+    doLast {
+        mkdir "${buildDir}/dependency/BOOT-INF/lib2"
+    }
+}
+
+task repackStableArtifacts(type: Copy ) {
+
+    dependsOn repackStableArtifactsPrepare
+
+    Set<String> stableArtifactDependencies = project.hasProperty( STABLE_ARTIFACTS_PROPERTY ) ?
+            Arrays.asList( project.property(STABLE_ARTIFACTS_PROPERTY).split(',') ).toSet():[]
+    def files = project.configurations.compile.getResolvedConfiguration().getFirstLevelModuleDependencies().stream()
+            .filter { i -> stableArtifactDependencies.contains( i.getModuleName() ) }
+            .flatMap { i -> i.allModuleArtifacts.stream() }
+            .map { i -> java.nio.file.Paths.get( i.getFile().getName()) }
+            .map { i -> new File( new File( project.buildDir, "dependency/BOOT-INF/lib"), i.toString() ) }
+            .findAll();
+
+    from( files )
+    into( new File( project.buildDir, "dependency/BOOT-INF/lib2") );
+
+    doLast {
+        files.forEach { i -> if ( i.exists() ) i.delete() }
+    }
+}
+
+docker {
+    dependsOn repackStableArtifacts
+
+    name "dockerregistry.artindustrial.com/demo/${project.name}"
+    tags "${version}"
+    copySpec.from(tasks.unpack.outputs).into("dependency" )
+    copySpec.from(tasks.repackStableArtifacts.outputs).into("dependency" )
+    buildArgs( ["DEPENDENCY" : "dependency"] )
+    // noCache true
+}
+
